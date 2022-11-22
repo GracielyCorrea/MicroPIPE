@@ -1,3 +1,5 @@
+#####EDITEI ESSA PRIMEIRA LINHA####
+
 #####SINGLE-ENDED#####
 
 TEST=$(ls | grep  .fastq.gz | sed 's/.fastq.gz//')
