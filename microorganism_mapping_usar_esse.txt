@@ -1,0 +1,378 @@
+#####SINGLE-ENDED#####
+
+TEST=$(ls | grep  .fastq.gz | sed 's/.fastq.gz//')
+for i in $TEST; 
+do
+
+java -Xmx64G -jar ../apps/Trimmomatic-0.39/trimmomatic-0.39.jar SE -threads 40 \
+$i".fastq.gz" \
+$i"_trimmed.fastq.gz" \
+ILLUMINACLIP:../apps/Trimmomatic-0.39/adapters/TruSeq2-SE.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:20 MINLEN:25
+
+java -Xmx6G -jar ../apps/picard.jar FastqToSam \
+FASTQ=  $i"_trimmed.fastq.gz" \
+OUTPUT= $i"_fastqtosam.bam" \
+READ_GROUP_NAME= $i \
+SAMPLE_NAME= $i \
+LIBRARY_NAME= TruSeq2 \
+PLATFORM= ILLUMINA \
+TMP_DIR=./temp
+
+set -o pipefail
+java -Xmx64G -jar ../apps/picard.jar SamToFastq \
+I=$i"_fastqtosam.bam" \
+FASTQ=/dev/stdout \
+CLIPPING_ATTRIBUTE=XT CLIPPING_ACTION=2 INTERLEAVE=true NON_PF=true \
+TMP_DIR=./temp | \
+bwa mem -M -t 40 ../db/genome.fa /dev/stdin | \
+java -Xmx64G -jar ../apps/picard.jar MergeBamAlignment \
+ALIGNED_BAM=/dev/stdin \
+UNMAPPED_BAM=$i"_fastqtosam.bam" \
+OUTPUT= $i"_piped.bam" \
+R= ../db/genome.fa CREATE_INDEX=true ADD_MATE_CIGAR=true \
+CLIP_ADAPTERS=false CLIP_OVERLAPPING_READS=true \
+INCLUDE_SECONDARY_ALIGNMENTS=true MAX_INSERTIONS_OR_DELETIONS=-1 \
+PRIMARY_ALIGNMENT_STRATEGY=MostDistant ATTRIBUTES_TO_RETAIN=XS \
+TMP_DIR=./temp
+
+done
+
+rm *_fastqtosam.bam *_trimmed.fastq.gz
+rm -R ./temp
+
+#####PAIR-ENDED#####
+
+TEST=$(ls | grep _1.fastq.gz | sed 's/_.*//')
+for i in $TEST; 
+do
+
+java -Xmx64G -jar ../apps/Trimmomatic-0.39/trimmomatic-0.39.jar PE -threads 40 \
+$i"_1.fastq.gz" \
+$i"_2.fastq.gz" \
+-baseout $i".fastq.gz" \
+ILLUMINACLIP:../apps/Trimmomatic-0.39/adapters/TruSeq2-PE.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:20 MINLEN:25
+
+
+java -Xmx6G -jar ../apps/picard.jar FastqToSam \
+FASTQ=  $i"_1P.fastq.gz" \
+FASTQ2= $i"_2P.fastq.gz" \
+OUTPUT= $i"_fastqtosam.bam" \
+READ_GROUP_NAME= $i \
+SAMPLE_NAME= $i \
+LIBRARY_NAME= TruSeq2 \
+PLATFORM= ILLUMINA \
+TMP_DIR=./temp
+
+set -o pipefail
+java -Xmx64G -jar ../apps/picard.jar SamToFastq \
+I=$i"_fastqtosam.bam" \
+FASTQ=/dev/stdout \
+CLIPPING_ATTRIBUTE=XT CLIPPING_ACTION=2 INTERLEAVE=true NON_PF=true \
+TMP_DIR=./temp | \
+bwa mem -M -t 40 -p ../db/genome.fa /dev/stdin | \
+java -Xmx64G -jar ../apps/picard.jar MergeBamAlignment \
+ALIGNED_BAM=/dev/stdin \
+UNMAPPED_BAM=$i"_fastqtosam.bam" \
+OUTPUT= $i"_piped.bam" \
+R= ../db/genome.fa CREATE_INDEX=true ADD_MATE_CIGAR=true \
+CLIP_ADAPTERS=false CLIP_OVERLAPPING_READS=true \
+INCLUDE_SECONDARY_ALIGNMENTS=true MAX_INSERTIONS_OR_DELETIONS=-1 \
+PRIMARY_ALIGNMENT_STRATEGY=MostDistant ATTRIBUTES_TO_RETAIN=XS \
+TMP_DIR=./temp
+
+done
+
+rm *_fastqtosam.bam *_trimmed.fastq.gz
+rm *_1P.fastq.gz *_2P.fastq.gz
+rm *_1U.fastq.gz *_2U.fastq.gz
+rm -R ./temp
+
+mv *_piped.bam ../mapped
+cd ../mapped
+
+###########################################
+#### MARK AND REMOVE DUPLICATED READS ####
+###########################################
+
+ls | grep _piped.bam | sed 's/_.*//' | parallel --max-args=1 \
+java -Xmx4G -jar ../apps/picard.jar MarkDuplicates \
+INPUT= {1}_piped.bam \
+METRICS_FILE= {1}_markduplicates_metrics.txt \
+REMOVE_DUPLICATES=true \
+OUTPUT= {1}_markduplicates.bam \
+OPTICAL_DUPLICATE_PIXEL_DISTANCE=100 \
+PROGRAM_RECORD_ID=null \
+TMP_DIR=./temp
+
+#############################
+###### SPLIT N CIGAR ########
+#############################
+
+#ls | grep _markduplicates.bam | sed 's/_.*//' | parallel --max-args=1 \
+#samtools view -@ 4 -h -b {1}_markduplicates.bam -q 255 -o 255.{1}_markduplicates.bam
+
+#ls | grep _markduplicates.bam | sed 's/_.*//' | parallel --max-args=1 \
+#samtools index -@ 4 {1}_markduplicates.bam
+
+#ls | grep 255. | sed 's/_.*//' | sed 's/255.//' | uniq | parallel --max-args=1 \
+#${GATK}/gatk SplitNCigarReads \
+#-R ${db}/GRCh38_genome.fa \
+#-I 255.{1}_markduplicates.bam \
+#-O {1}_splitcigar.bam
+
+#############################
+###### Variant Calling 1 ####
+#############################
+
+TEST=$(ls | grep _markduplicates.bam | sed 's/_.*//')
+for i in $TEST; 
+do
+
+#Run SAMtools mpileup on the BAM file (in this case, sample.bam):
+samtools mpileup -B -q 1 -f ../db/genome.fa $i"_markduplicates.bam"  > $i"_markduplicates.mpileup"
+
+#Run VarScan mpileup2snp to call SNVs.
+java -jar ../apps/VarScan.jar mpileup2snp $i"_markduplicates.mpileup" \
+--min-coverage 10 --min-var-freq 0.20 --p-value 0.05 \
+--output-vcf > $i"_snps.vcf"
+
+#Run VarScan mpileup2indel to call indels:
+java -jar ../apps/VarScan.jar mpileup2indel $i"_markduplicates.mpileup" \
+--min-coverage 10 --min-var-freq 0.10 --p-value 0.10 \
+--output-vcf > $i"_indels.vcf"
+
+done
+
+########################################
+####  FILTER GOOD QUALITY VARIANTS 1 ###
+########################################
+
+TEST=$(ls | grep _markduplicates.bam | sed 's/_.*//')
+for i in $TEST; 
+do
+
+../apps/gatk/gatk VariantFiltration \
+-R ../db/genome.fa \
+-V $i"_snps.vcf" \
+--filter-expression "QD < 2.0 || FS > 60.0 || MQ < 50.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0" \
+--filter-name "my_snp_filter" \
+-G-filter "GQ < 20.0" \
+-G-filter-name "lowGQ" \
+-O  $i"_filtered_snps.vcf.gz"
+
+../apps/gatk/gatk VariantFiltration \
+-R ../db/genome.fa \
+-V $i"_indels.vcf" \
+--filter-expression "QD < 2.0 || FS > 200.0 || ReadPosRankSum < -20.0" \
+--filter-name "my_indel_filter" \
+-G-filter "GQ < 20.0" \
+-G-filter-name "lowGQ" \
+-O $i"_filtered_indels.vcf.gz"
+
+done
+
+############################
+#### RECALIBRATE BASES #####
+############################
+
+TEST=$(ls | grep _markduplicates.bam | sed 's/_.*//')
+for i in $TEST; 
+do
+
+####CREATING RECALIBRATION DATA TABLE
+../apps/gatk/gatk BaseRecalibrator \
+-R ../db/genome.fa \
+-I $i"_markduplicates.bam" \
+--use-original-qualities \
+-O $i"_recal_data.table" \
+--known-sites $i"_filtered_snps.vcf.gz" \
+--known-sites $i"_filtered_indels.vcf.gz"
+
+#### RECALIBRATING FILE
+../apps/gatk/gatk ApplyBQSR \
+-R ../db/genome.fa \
+-I $i"_markduplicates.bam" \
+--use-original-qualities \
+-O $i"_recal.bam" \
+--bqsr-recal-file $i"_recal_data.table" \
+--static-quantized-quals 10 \
+--static-quantized-quals 20 \
+--static-quantized-quals 30
+
+done
+
+#############################
+###### Variant Calling 2 ####
+#############################
+
+TEST=$(ls | grep _recal.bam | sed 's/_.*//')
+for i in $TEST; 
+do
+
+#Run SAMtools mpileup on the BAM file (in this case, sample.bam):
+samtools mpileup -B -q 1 -f ../db/genome.fa $i"_recal.bam" > $i"_recal.mpileup"
+
+done
+
+TEST=$(ls | grep _recal.bam | sed 's/_.*//')
+for i in $TEST; 
+do
+
+#Run VarScan mpileup2snp to call SNVs.
+java -jar ../apps/VarScan.jar mpileup2snp $i"_recal.mpileup" --min-coverage 10 --min-var-freq 0.20 \
+--p-value 0.05 --output-vcf > $i"_snps.vcf"
+
+#Run VarScan mpileup2indel to call indels.
+java -jar ../apps/VarScan.jar mpileup2indel $i"_recal.mpileup" --min-coverage 10 --min-var-freq 0.10 \
+--p-value 0.10 --output-vcf > $i"_indels.vcf"
+
+done
+
+########################################
+####  FILTER GOOD QUALITY VARIANTS 2 ###
+########################################
+
+TEST=$(ls | grep _recal.bam | sed 's/_.*//')
+for i in $TEST; 
+do
+
+../apps/gatk/gatk VariantFiltration \
+-R ../db/genome.fa \
+-V $i"_snps.vcf" \
+--filter-expression "QD < 2.0 || FS > 60.0 || MQ < 50.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0" \
+--filter-name "my_snp_filter" \
+-G-filter "GQ < 20.0" \
+-G-filter-name "lowGQ" \
+-O $i"_filtered_snps.vcf.gz"
+
+../apps/gatk/gatk VariantFiltration \
+-R ../db/genome.fa \
+-V $i"_indels.vcf" \
+--filter-expression "QD < 2.0 || FS > 200.0 || ReadPosRankSum < -20.0" \
+--filter-name "my_indel_filter" \
+-G-filter "GQ < 20.0" \
+-G-filter-name "lowGQ" \
+-O $i"_filtered_indels.vcf.gz"
+
+done
+
+#####################################
+#### VARIANT ANNOTATION snpEff ######
+#####################################
+
+#desativar conda
+conda deactivate
+
+#Download database (located at ../apps/snpEff/data/Bacillus_subtilis_subsp_subtilis_str_168)
+#java -jar ../apps/snpEff/snpEff.jar download -v Bacillus_subtilis_subsp_subtilis_str_168
+
+TEST=$(ls | grep _recal.bam | sed 's/_.*//')
+for i in $TEST; 
+do
+
+#Run job
+java -jar ../apps/snpEff/snpEff.jar Bacillus_subtilis_subsp_subtilis_str_168 $i"_filtered_snps.vcf.gz" -stats $i"_snps_snpEff_summary.html" -o vcf > $i"_snps_snpEff_annotation.vcf"
+java -jar ../apps/snpEff/snpEff.jar Bacillus_subtilis_subsp_subtilis_str_168 $i"_filtered_indels.vcf.gz" -stats $i"_indels_snpEff_summary.html" -o vcf > $i"_indels_snpEff_annotation.vcf"
+
+done
+
+mv *snpEff* ../annotation
+mv *vcf.gz* ../variant_calling
+
+
+#####################################
+#### GERAR FASTA CONSENSO ###########
+#####################################
+
+TEST=$(ls | grep _recal.bam | sed 's/_.*//')
+for i in $TEST; 
+do
+
+samtools mpileup -uf ../db/genome.fa $i"_recal.bam" | bcftools call -c --ploidy 1 | vcfutils.pl vcf2fq > $i".fasta"
+
+done
+
+#####################################
+#### REMOVER FILES INTERMEDIARIOS ###
+#####################################
+
+rm *_markduplicates*
+rm *_recal.mpileup
+rm *_recal_data.table
+rm *_piped.bam
+rm *_indels.vcf
+rm *_snps.vcf
+
+#####################################
+#### VARIACAO ESTRUTURAL ############
+#####################################
+
+TEST=$(ls | grep _recal.bam | sed 's/_.*//')
+for i in $TEST; 
+do
+
+../apps/delly/src/delly call -g ../db/genome.fa \
+$i"_recal.bam" \
+-q 20 \
+-o $i"_sv.bcf" 
+
+done
+
+TEST=$(ls | grep _recal.bam | sed 's/_.*//')
+for i in $TEST; 
+do
+
+bcftools convert --threads 40 \
+$i"_sv.bcf" \
+-O z -o $i"_sv.vcf.gz" \
+--include 'FILTER="PASS"'
+
+done
+
+#####################################
+#### COPY NUMBER VARIATION ##########
+#####################################
+
+#download mappability files at:
+#https://gear.embl.de/data/delly/
+
+TEST=$(ls | grep _recal.bam | sed 's/_.*//')
+for i in $TEST; 
+do
+
+../apps/delly/src/delly cnv -g ../db/genome.fa \
+-m ../db/map.fa.gz \
+$i"_recal.bam" \
+-l $i"_sv.bcf" \
+-q 20 \
+--ploidy 1 \
+-o $i"_cnv.bcf" \
+-c $i"_coverage.gz"
+
+done
+
+TEST=$(ls | grep _recal.bam | sed 's/_.*//')
+for i in $TEST; 
+do
+
+bcftools convert --threads 40 \
+$i"_cnv.bcf" \
+-O z -o $i"_cnv.vcf.gz" \
+--include 'FILTER="PASS"'
+
+done
+
+#####################################
+#### GERAR FASTA CONSENSSOUS ########
+#####################################
+
+TEST=$(ls | grep _recal.bam | sed 's/_.*//')
+for i in $TEST; 
+do
+
+samtools sort $i"_recal.bam" -@ 40 -l 0 -o $i"_sorted.bam"
+samtools index -@ 40 $i"_sorted.bam"
+samtools mpileup -uf  $i"_sorted.bam" | bcftools call -c --ploidy 1 | vcfutils.pl vcf2fq >  $i"_consensus.fasta"
+rm $i"_sorted.*"
+
+done
