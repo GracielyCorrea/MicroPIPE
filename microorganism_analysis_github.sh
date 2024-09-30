@@ -6,6 +6,7 @@ export projecttype=genome
 
 #create directories
 
+mkdir -p ~/microPIPE/users/$username/$projectname/$projecttype/analysis
 mkdir -p ~/microPIPE/users/$username/$projectname/$projecttype/annotation
 mkdir -p ~/microPIPE/users/$username/$projectname/$projecttype/mapped
 mkdir -p ~/microPIPE/users/$username/$projectname/$projecttype/rawdata
@@ -34,7 +35,7 @@ export rev_adapter=CTGTCTCTTATA
 #PATHs
 export FastQC=~/microPIPE/apps/FastQC
 export TrimGalore=~/microPIPE/apps/TrimGalore-0.6.10
-export picard=~/microPIPE/apps/picard/build/libs
+export picard=~/microPIPE/apps
 export db=~/microPIPE/db
 export GATK_db=~/microPIPE/apps/GATK_db
 export GATK=~/microPIPE/apps/gatk-4.4.0.0
@@ -44,11 +45,19 @@ export snpEff=~/microPIPE/apps/snpEff
 #access rawdata
 cd ~/microPIPE/users/$username/$projectname/$projecttype/rawdata
 
-#run fastqc pre adapter and sequence trimming
+#run fastqc pre adapter and sequence trimming (It took 429 seconds in this step.)
+START_TIME=$(date +%s)
+
 ls  | grep .fastq.gz | parallel -n 1 -j $nfiles ${FastQC}/fastqc {1}
 mv *_fastqc.* ../report
 
-#adapter and low-quality sequence trimming
+END_TIME=$(date +%s)
+echo "It took $(($END_TIME - $START_TIME)) seconds in this step."
+
+
+#adapter and low-quality sequence trimming (It took 347 seconds in this step.)
+START_TIME=$(date +%s)
+
 ls | grep _1.fastq.gz | uniq | sed 's/_1.fastq.gz//g' | parallel -n 1 -j $nsamples \
 ${TrimGalore}/trim_galore --paired \
    -a $fwd_adapter \
@@ -61,8 +70,13 @@ ${TrimGalore}/trim_galore --paired \
    {1}_2.fastq.gz \
    -o ../tmp/cleaned/
 
-#mapping with reference genome
+END_TIME=$(date +%s)
+echo "It took $(($END_TIME - $START_TIME)) seconds in this step."
+
+#mapping with reference genome (It took 5496 seconds in this step.)
 cd ~/microPIPE/users/$username/$projectname/$projecttype/tmp/cleaned
+
+START_TIME=$(date +%s)
 
 ls | grep _1.fq.gz | uniq | sed 's/_1_val_1.fq.gz//g' | parallel -n 1 -j $nsamples \
 java -Xmx10G -jar ${picard}/picard.jar FastqToSam \
@@ -97,8 +111,16 @@ done
 
 mv *_piped.bam ../mapped
 
-#mark and remove duplicates
+END_TIME=$(date +%s)
+echo "It took $(($END_TIME - $START_TIME)) seconds in this step."
+
+
+#mark and remove duplicates (It took 1821 seconds in this step.)
 cd ~/microPIPE/users/$username/$projectname/$projecttype/tmp/mapped
+
+START_TIME=$(date +%s)
+
+mkdir temp
 
 for i in $(ls | grep _piped.bam | uniq | sed 's/_.*//'); do
 ${GATK}/gatk MarkDuplicatesSpark \
@@ -106,12 +128,20 @@ ${GATK}/gatk MarkDuplicatesSpark \
 -M $i"_markduplicates_metrics.txt" \
 -O $i"_markduplicates.bam" \
 --remove-all-duplicates true \
---optical-duplicate-pixel-distance 100
+--optical-duplicate-pixel-distance 100 \
+--tmp-dir ./temp
 done
+
+END_TIME=$(date +%s)
+echo "It took $(($END_TIME - $START_TIME)) seconds in this step."
 
 ###########################
 #### VARIANT CALLING 1 ####
 ###########################
+
+#It took 4008 seconds in this step.
+
+START_TIME=$(date +%s)
 
 ls | grep _markduplicates.bam | sed 's/_.*//' | uniq | parallel -n 1 -j $nsamples \
 samtools mpileup -B \
@@ -183,9 +213,16 @@ tabix -p vcf $i"_analysis-ready-indels-filteredGT.vcf.gz"
 
 done
 
+END_TIME=$(date +%s)
+echo "It took $(($END_TIME - $START_TIME)) seconds in this step."
+
 ############################
 #### RECALIBRATE BASES #####
 ############################
+
+#It took 2163 seconds in this step.
+
+START_TIME=$(date +%s)
 
 for i in $(ls | grep _markduplicates.bam | sed 's/_.*//' | uniq); do
 
@@ -214,9 +251,17 @@ done
 #move recalibrated files to mapped folder
 mv *_recal* ../../mapped
 
+END_TIME=$(date +%s)
+echo "It took $(($END_TIME - $START_TIME)) seconds in this step."
+
 ###########################
 #### VARIANT CALLING 2 ####
 ###########################
+
+#It took 3895 seconds in this step
+
+START_TIME=$(date +%s)
+
 cd ~/microPIPE/users/$username/$projectname/$projecttype/mapped
 
 ls | grep _recal.bam | sed 's/_.*//' | uniq | parallel -n 1 -j $nsamples \
@@ -291,9 +336,14 @@ tabix -p vcf $i"_analysis-ready-indels-filteredGT.vcf.gz"
 
 done
 
+END_TIME=$(date +%s)
+echo "It took $(($END_TIME - $START_TIME)) seconds in this step."
+
 #####################################
 #### VARIANT ANNOTATION snpEff ######
 #####################################
+
+#It took 76 seconds in this step.
 
 #Download database (located at ../apps/snpEff/data/Bacillus_subtilis_subsp_subtilis_str_168)
 #java -jar ../apps/snpEff/snpEff.jar download -v Bacillus_subtilis_subsp_subtilis_str_168
@@ -307,6 +357,8 @@ done
 
 #3 - #once everytink is settled up, hit the command:
 #java -jar ${snpEff}/snpEff.jar -jar snpEff.jar build -genbank -v Bacillus_subtilis_str_ko7
+
+START_TIME=$(date +%s)
 
 cd ~/microPIPE/users/$username/$projectname/$projecttype/annotation
 
@@ -331,19 +383,32 @@ tabix -p vcf $i"_indels_snpEff_annotation.vcf.gz"
 
 done
 
+END_TIME=$(date +%s)
+echo "It took $(($END_TIME - $START_TIME)) seconds in this step."
+
 #######################
 #### DATA ANALYSIS ####
 #######################
+
+#It took 1 seconds in this step.
+
+START_TIME=$(date +%s)
+
+#cd ~/microPIPE/users/$username/$projectname/$projecttype/analysis
+
 for i in $(ls ../variant_calling | grep  _recal.mpileup | sed 's/_.*//'); do
 
 bcftools query \
 -f '%CHROM\t%POS\t%REF\t%ALT\t[%GT]\t[%AD]\t[%ADF]\t[%ADR]\t[%GQ]\t[%FREQ]\t[%PVAL]\t[%EFF]\n' \
 -o $i"_snps_snpEff_annotation.tsv" \
-$i"_snps_snpEff_annotation.vcf.gz"
+"../annotation/"$i"_snps_snpEff_annotation.vcf.gz"
 
 bcftools query \
 -f '%CHROM\t%POS\t%REF\t%ALT\t[%GT]\t[%AD]\t[%ADF]\t[%ADR]\t[%GQ]\t[%FREQ]\t[%PVAL]\t[%EFF]\n' \
 -o $i"_indels_snpEff_annotation.tsv" \
-$i"_indels_snpEff_annotation.vcf.gz"
+"../annotation/"$i"_indels_snpEff_annotation.vcf.gz"
 
 done
+
+END_TIME=$(date +%s)
+echo "It took $(($END_TIME - $START_TIME)) seconds in this step."
