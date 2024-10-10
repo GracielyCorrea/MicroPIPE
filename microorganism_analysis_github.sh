@@ -23,12 +23,12 @@ mkdir -p ~/microPIPE/users/$username/$projectname/$projecttype/tmp/mapped
 export threads=48
 
 #project variables
-export ref_genome=ko7
+export ref_genome=eb2
 export nsamples=7
 export nfiles=14
 export library=NEXTERA
 export platform=ILLUMINA
-export annotation=Bacillus_subtilis_str_ko7
+export annotation=Bacillus_subtilis_subsp_subtilis_str_168
 export fwd_adapter=CTGTCTCTTATA
 export rev_adapter=CTGTCTCTTATA
 
@@ -350,13 +350,13 @@ echo "It took $(($END_TIME - $START_TIME)) seconds in this step."
 
 #or create a custom database:
 
-#1 - create a folder called Bacillus_subtilis_str_ko7 inside the data directory of snpeff installation folder
+#1 - create a folder called Bacillus_subtilis_subsp_subtilis_str_168 inside the data directory of snpeff installation folder
 #2 - download and paste in the newly created folder the sequences.fa and the genes.gbk (genbak annotation file) files from NCBI.
 
 #OBS: the files should have this name in the SNP folder, so you will need to rename it
 
 #3 - #once everytink is settled up, hit the command:
-#java -jar ${snpEff}/snpEff.jar -jar snpEff.jar build -genbank -v Bacillus_subtilis_str_ko7
+#java -jar ${snpEff}/snpEff.jar -jar snpEff.jar build -genbank -v Bacillus_subtilis_subsp_subtilis_str_168
 
 START_TIME=$(date +%s)
 
