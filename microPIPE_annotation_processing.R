@@ -20,6 +20,7 @@ read_snpEff = function(sample_name){
   snps$VC = "SNV"
   snps$SAMPLE_ID = i
   
+  tryCatch({
   indels = read.table(paste0(i,"_indels_snpEff_annotation.tsv"),
                       sep = "\t", 
                       header = FALSE)
@@ -27,10 +28,17 @@ read_snpEff = function(sample_name){
   indels$VC = "INDEL"
   indels$SAMPLE_ID = i
   
-  assign(gsub("-","_",paste0("sample",i)), 
+    assign(gsub("-","_",paste0("sample",i)), 
          rbind(snps, indels), 
          .GlobalEnv)
+  }, error = function(e){
+      assign(gsub("-","_",paste0("sample",i)), 
+        rbind(snps),
+        .GlobalEnv)
+  }
+  )
   
+
 }
 
 ####MAIN SCRIPT####
@@ -71,3 +79,10 @@ snpeff_annotation = main_dataset %>%
            sep = "\\|")
 
 main_dataset = cbind(main_dataset, snpeff_annotation)
+
+write.table(main_dataset, 
+            file = "../Rdata/annotation_table.txt",
+            sep = "\t", 
+            quote=FALSE, 
+            col.names = TRUE, 
+            row.names = FALSE)
